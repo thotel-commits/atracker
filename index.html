@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arbitrage Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #58a6ff;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #8b949e;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .controls label {
+            color: #8b949e;
+            font-size: 14px;
+        }
+        
+        .controls input, .controls select {
+            background: #161b22;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .controls button {
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .controls button:hover {
+            background: #2ea043;
+        }
+        
+        .status {
+            color: #8b949e;
+            font-size: 12px;
+            margin-bottom: 20px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #161b22;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        th {
+            background: #21262d;
+            color: #58a6ff;
+            padding: 12px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #21262d;
+            font-size: 13px;
+        }
+        
+        tr:hover {
+            background: #1c2128;
+        }
+        
+        .profit {
+            color: #3fb950;
+            font-weight: 600;
+        }
+        
+        .loss {
+            color: #f85149;
+        }
+        
+        .neutral {
+            color: #8b949e;
+        }
+        
+        .token-name {
+            font-weight: 600;
+            color: #c9d1d9;
+        }
+        
+        .price {
+            font-family: 'Courier New', monospace;
+        }
+        
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #8b949e;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #58a6ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Arbitrage Tracker</h1>
+        <p class="subtitle">HE ve TD arasındaki fiyat farklarını anlık olarak takip edin</p>
+        
+        <div class="controls">
+            <div>
+                <label>Minimum Kâr (%):</label>
+                <input type="number" id="minProfit" value="0" min="0" step="0.1">
+            </div>
+            <div>
+                <label>Swap Ücreti (%):</label>
+                <input type="number" id="swapFee" value="0.3" min="0" step="0.1">
+            </div>
+            <div>
+                <label>Filtre:</label>
+                <select id="filter">
+                    <option value="all">Tümü</option>
+                    <option value="profit">Sadece Kârlı</option>
+                </select>
+            </div>
+            <button onclick="fetchData()">Yenile</button>
+        </div>
+        
+        <div class="status" id="status">Yükleniyor...</div>
+        
+        <table id="arbitrageTable">
+            <thead>
+                <tr>
+                    <th>Token</th>
+                    <th>HE Alış</th>
+                    <th>HE Satış</th>
+                    <th>TD Fiyat</th>
+                    <th>HE→TD Kâr</th>
+                    <th>TD→HE Kâr</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody">
+                <tr>
+                    <td colspan="6" class="loading">Veriler yükleniyor...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const HIVE_ENGINE_API = 'https://api.hive-engine.com/rpc/contracts';
+        let updateInterval;
+
+        async function fetchHEMarket() {
+            const payload = {
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'find',
+                params: {
+                    contract: 'market',
+                    table: 'sellBook',
+                    query: {},
+                    limit: 1000
+                }
+            };
+
+            const response = await fetch(HIVE_ENGINE_API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+            return data.result || [];
+        }
+
+        async function fetchHESellBook() {
+            const payload = {
+                jsonrpc: '2.0',
+                id: 2,
+                method: 'find',
+                params: {
+                    contract: 'market',
+                    table: 'buyBook',
+                    query: {},
+                    limit: 1000
+                }
+            };
+
+            const response = await fetch(HIVE_ENGINE_API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+            return data.result || [];
+        }
+
+        async function fetchTribalDexPools() {
+            const payload = {
+                jsonrpc: '2.0',
+                id: 3,
+                method: 'find',
+                params: {
+                    contract: 'swap',
+                    table: 'pools',
+                    query: {},
+                    limit: 1000
+                }
+            };
+
+            const response = await fetch(HIVE_ENGINE_API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+            return data.result || [];
+        }
+
+        function calculateArbitrage() {
+            const minProfit = parseFloat(document.getElementById('minProfit').value) || 0;
+            const swapFee = parseFloat(document.getElementById('swapFee').value) || 0.3;
+            const filter = document.getElementById('filter').value;
+
+            return async () => {
+                document.getElementById('status').textContent = 'Veriler çekiliyor...';
+                
+                try {
+                    const [sellBook, buyBook, pools] = await Promise.all([
+                        fetchHEMarket(),
+                        fetchHESellBook(),
+                        fetchTribalDexPools()
+                    ]);
+
+                    // HE Market: En iyi satış fiyatı (en düşük ask)
+                    const hePrices = {};
+                    sellBook.forEach(order => {
+                        const symbol = order.symbol;
+                        const price = parseFloat(order.price);
+                        if (!hePrices[symbol] || price < hePrices[symbol].ask) {
+                            hePrices[symbol] = { ask: price };
+                        }
+                    });
+
+                    // HE Market: En iyi alış fiyatı (en yüksek bid)
+                    buyBook.forEach(order => {
+                        const symbol = order.symbol;
+                        const price = parseFloat(order.price);
+                        if (!hePrices[symbol]) hePrices[symbol] = {};
+                        if (!hePrices[symbol].bid || price > hePrices[symbol].bid) {
+                            hePrices[symbol].bid = price;
+                        }
+                    });
+
+                    // TD Pools: Havuz fiyatları
+                    const tdPrices = {};
+                    pools.forEach(pool => {
+                        const symbol = pool.baseSymbol || pool.quoteSymbol;
+                        if (symbol && symbol !== 'SWAP.HIVE') {
+                            const basePrice = parseFloat(pool.basePrice);
+                            const quotePrice = parseFloat(pool.quotePrice);
+                            if (basePrice > 0) {
+                                tdPrices[symbol] = basePrice;
+                            }
+                        }
+                    });
+
+                    // Arbitraj hesapla
+                    const opportunities = [];
+                    
+                    Object.keys(hePrices).forEach(symbol => {
+                        const he = hePrices[symbol];
+                        const td = tdPrices[symbol];
+
+                        if (!he.ask || !he.bid || !td) return;
+
+                        // HE'den al, TD'de sat
+                        const profitHEtoTD = ((td - he.ask) / he.ask) * 100 - swapFee;
+                        
+                        // TD'den al, HE'de sat
+                        const profitTDtoHE = ((he.bid - td) / td) * 100 - swapFee;
+
+                        if (filter === 'profit' && profitHEtoTD < minProfit && profitTDtoHE < minProfit) {
+                            return;
+                        }
+
+                        if (profitHEtoTD >= minProfit || profitTDtoHE >= minProfit) {
+                            opportunities.push({
+                                symbol,
+                                heAsk: he.ask,
+                                heBid: he.bid,
+                                tdPrice: td,
+                                profitHEtoTD,
+                                profitTDtoHE
+                            });
+                        }
+                    });
+
+                    // Kâr oranına göre sırala
+                    opportunities.sort((a, b) => Math.max(b.profitHEtoTD, b.profitTDtoHE) - Math.max(a.profitHEtoTD, a.profitTDtoHE));
+
+                    renderTable(opportunities);
+                    document.getElementById('status').textContent = `Son güncelleme: ${new Date().toLocaleTimeString('tr-TR')} | ${opportunities.length} fırsat bulundu`;
+                } catch (error) {
+                    console.error('Hata:', error);
+                    document.getElementById('status').textContent = 'Hata: Veriler çekilemedi';
+                }
+            };
+        }
+
+        function renderTable(opportunities) {
+            const tbody = document.getElementById('tableBody');
+            
+            if (opportunities.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="no-data">Şu an arbitraj fırsatı bulunmuyor</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = opportunities.map(opp => {
+                const profitHEtoTDClass = opp.profitHEtoTD > 0 ? 'profit' : (opp.profitHEtoTD < 0 ? 'loss' : 'neutral');
+                const profitTDtoHEClass = opp.profitTDtoHE > 0 ? 'profit' : (opp.profitTDtoHE < 0 ? 'loss' : 'neutral');
+
+                return `
+                    <tr>
+                        <td class="token-name">${opp.symbol}</td>
+                        <td class="price">${opp.heAsk.toFixed(6)}</td>
+                        <td class="price">${opp.heBid.toFixed(6)}</td>
+                        <td class="price">${opp.tdPrice.toFixed(6)}</td>
+                        <td class="${profitHEtoTDClass}">${opp.profitHEtoTD.toFixed(2)}%</td>
+                        <td class="${profitTDtoHEClass}">${opp.profitTDtoHE.toFixed(2)}%</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function fetchData() {
+            const fetchAndRender = calculateArbitrage();
+            fetchAndRender();
+        }
+
+        // Sayfa yüklendiğinde ve her 30 saniyede bir güncelle
+        window.addEventListener('load', () => {
+            fetchData();
+            updateInterval = setInterval(fetchData, 30000);
+        });
+
+        // Filtre değiştiğinde güncelle
+        document.getElementById('minProfit').addEventListener('change', fetchData);
+        document.getElementById('swapFee').addEventListener('change', fetchData);
+        document.getElementById('filter').addEventListener('change', fetchData);
+    </script>
+</body>
+</html>
