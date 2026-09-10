@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TD İçi Arbitraj Keşif</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #58a6ff; margin-bottom: 10px; font-size: 28px; }
+        .subtitle { color: #8b949e; margin-bottom: 30px; font-size: 14px; }
+        .controls {
+            display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;
+            align-items: flex-end;
+        }
+        .controls > div { display: flex; flex-direction: column; gap: 4px; }
+        .controls label { color: #8b949e; font-size: 12px; }
+        .controls input, .controls select {
+            background: #161b22; border: 1px solid #30363d;
+            color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 14px;
+        }
+        .controls button {
+            background: #238636; color: white; border: none;
+            padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px;
+            height: 36px;
+        }
+        .controls button:hover { background: #2ea043; }
+        .status { color: #8b949e; font-size: 12px; margin-bottom: 20px; }
+        
+        .debug-panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .debug-panel h3 { color: #58a6ff; margin-bottom: 10px; font-size: 13px; }
+        .debug-line { color: #8b949e; margin: 3px 0; word-break: break-all; }
+        .debug-line.error { color: #f85149; }
+        .debug-line.success { color: #3fb950; }
+        .debug-line.info { color: #58a6ff; }
+        
+        .summary {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .summary-item {
+            background: #21262d;
+            padding: 12px;
+            border-radius: 6px;
+        }
+        .summary-label { color: #8b949e; font-size: 12px; }
+        .summary-value { color: #58a6ff; font-size: 20px; font-weight: bold; margin-top: 4px; }
+        
+        table {
+            width: 100%; border-collapse: collapse;
+            background: #161b22; border-radius: 8px; overflow: hidden;
+            margin-bottom: 20px;
+        }
+        th {
+            background: #21262d; color: #58a6ff;
+            padding: 12px; text-align: left; font-size: 13px; font-weight: 600;
+        }
+        td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 13px; }
+        tr:hover { background: #1c2128; }
+        .profit { color: #3fb950; font-weight: 600; }
+        .loss { color: #f85149; }
+        .neutral { color: #8b949e; }
+        .token-name { font-weight: 600; color: #c9d1d9; }
+        .price { font-family: 'Courier New', monospace; }
+        .no-data { text-align: center; padding: 40px; color: #8b949e; }
+        .loading { text-align: center; padding: 40px; color: #58a6ff; }
+        
+        .nav {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #161b22;
+            border-radius: 6px;
+        }
+        .nav a {
+            color: #58a6ff;
+            text-decoration: none;
+            margin-right: 15px;
+        }
+        .nav a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="index.html">← HE vs TD Arbitraj</a>
+            <strong>TD İçi Arbitraj Keşif</strong>
+        </div>
+        
+        <h1>🔍 TD İçi Arbitraj Keşif</h1>
+        <p class="subtitle">Hive Engine'de aynı token'in farklı havuzları arasındaki fiyat farklarını bul</p>
+        
+        <div class="controls">
+            <div>
+                <label>Minimum Fark (%):</label>
+                <input type="number" id="minDiff" value="0" min="0" step="0.1">
+            </div>
+            <div>
+                <label>Swap Ücreti (%):</label>
+                <input type="number" id="swapFee" value="0.6" min="0" step="0.1">
+            </div>
+            <div>
+                <label>Filtre:</label>
+                <select id="filter">
+                    <option value="all">Tüm Tokenler</option>
+                    <option value="multi">Sadece Çoklu Havuz</option>
+                    <option value="profit">Sadece Kârlı</option>
+                </select>
+            </div>
+            <button onclick="discover()">Keşfet</button>
+        </div>
+        
+        <div class="status" id="status">Hazır...</div>
+        
+        <div class="summary" id="summary" style="display: none;">
+            <div class="summary-item">
+                <div class="summary-label">Toplam Havuz</div>
+                <div class="summary-value" id="totalPools">0</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Benzersiz Token</div>
+                <div class="summary-value" id="uniqueTokens">0</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Çoklu Havuz Token</div>
+                <div class="summary-value" id="multiPoolTokens">0</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Arbitraj Fırsatı</div>
+                <div class="summary-value" id="opportunities">0</div>
+            </div>
+        </div>
+        
+        <div class="debug-panel" id="debugPanel">
+            <h3>🔍 Debug Bilgisi</h3>
+            <div id="debugContent">Başlatmak için "Keşfet" butonuna bas...</div>
+        </div>
+        
+        <h2 style="color: #58a6ff; margin-bottom: 15px;">📊 Token Bazlı Analiz</h2>
+        <table id="tokenTable">
+            <thead>
+                <tr>
+                    <th>Token</th>
+                    <th>Havuz Sayısı</th>
+                    <th>Pair'ler</th>
+                    <th>En Düşük (SWAP.HIVE)</th>
+                    <th>En Yüksek (SWAP.HIVE)</th>
+                    <th>Fark (%)</th>
+                    <th>Kâr (%)</th>
+                </tr>
+            </thead>
+            <tbody id="tokenTableBody">
+                <tr>
+                    <td colspan="7" class="loading">Veri bekleniyor...</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h2 style="color: #58a6ff; margin-bottom: 15px;">🎯 Arbitraj Fırsatları</h2>
+        <table id="arbTable">
+            <thead>
+                <tr>
+                    <th>Token</th>
+                    <th>Ucuz Havuz</th>
+                    <th>Pahalı Havuz</th>
+                    <th>Al (SWAP.HIVE)</th>
+                    <th>Sat (SWAP.HIVE)</th>
+                    <th>Brüt Fark</th>
+                    <th>Net Kâr</th>
+                </tr>
+            </thead>
+            <tbody id="arbTableBody">
+                <tr>
+                    <td colspan="7" class="loading">Veri bekleniyor...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const HIVE_ENGINE_API = 'https://api.hive-engine.com/rpc/contracts';
+
+        function logDebug(message, type = 'info') {
+            const content = document.getElementById('debugContent');
+            const line = document.createElement('div');
+            line.className = `debug-line ${type}`;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            content.appendChild(line);
+            while (content.children.length > 50) {
+                content.removeChild(content.firstChild);
+            }
+        }
+
+        function safeParseFloat(value) {
+            if (value === null || value === undefined || value === '') return null;
+            const normalized = String(value).replace(/,/g, '.');
+            const parsed = parseFloat(normalized);
+            return isNaN(parsed) ? null : parsed;
+        }
+
+        async function apiCall(method, params) {
+            const payload = {
+                jsonrpc: '2.0',
+                id: Math.random(),
+                method: method,
+                params: params
+            };
+            const response = await fetch(HIVE_ENGINE_API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            return await response.json();
+        }
+
+        async function discover() {
+            const minDiff = parseFloat(document.getElementById('minDiff').value) || 0;
+            const swapFee = parseFloat(document.getElementById('swapFee').value) || 0.6;
+            const filter = document.getElementById('filter').value;
+
+            document.getElementById('status').textContent = 'Havuzlar çekiliyor...';
+            document.getElementById('debugContent').innerHTML = '';
+            document.getElementById('summary').style.display = 'none';
+
+            try {
+                logDebug('Tüm marketpools havuzları çekiliyor...', 'info');
+                const result = await apiCall('find', {
+                    contract: 'marketpools',
+                    table: 'pools',
+                    query: {},
+                    limit: 1000
+                });
+
+                const pools = result.result || [];
+                logDebug(`${pools.length} havuz çekildi`, 'success');
+
+                if (pools.length === 0) {
+                    logDebug('Havuz bulunamadı!', 'error');
+                    return;
+                }
+
+                // Referans havuzları bul (SWAP.HIVE bazlı çapraz kur için)
+                logDebug('Referans havuzları aranıyor...', 'info');
+                const referencePrices = {}; // SWAP.HBD -> SWAP.HIVE oranı
+                
+                pools.forEach(pool => {
+                    const tokenPair = pool.tokenPair;
+                    if (!tokenPair) return;
+                    const parts = tokenPair.split(':');
+                    if (parts.length !== 2) return;
+                    
+                    const baseSymbol = parts[0];
+                    const quoteSymbol = parts[1];
+                    const baseQty = safeParseFloat(pool.baseQuantity);
+                    const quoteQty = safeParseFloat(pool.quoteQuantity);
+                    
+                    if (!baseQty || !quoteQty || baseQty <= 0 || quoteQty <= 0) return;
+                    
+                    // SWAP.HIVE:SWAP.HBD gibi referans pair'leri bul
+                    if (baseSymbol === 'SWAP.HIVE' && quoteSymbol.startsWith('SWAP.') && quoteSymbol !== 'SWAP.HIVE') {
+                        referencePrices[quoteSymbol] = baseQty / quoteQty;
+                        logDebug(`Referans: 1 ${quoteSymbol} = ${(baseQty / quoteQty).toFixed(8)} SWAP.HIVE`, 'info');
+                    }
+                });
+
+                // Token bazlı grupla
+                const tokenPools = {};
+                pools.forEach(pool => {
+                    const tokenPair = pool.tokenPair;
+                    if (!tokenPair) return;
+                    const parts = tokenPair.split(':');
+                    if (parts.length !== 2) return;
+                    
+                    const baseSymbol = parts[0];
+                    const quoteSymbol = parts[1];
+                    const baseQty = safeParseFloat(pool.baseQuantity);
+                    const quoteQty = safeParseFloat(pool.quoteQuantity);
+                    
+                    if (!baseQty || !quoteQty || baseQty <= 0 || quoteQty <= 0) return;
+                    
+                    // Hangi token? (SWAP.HIVE olmayan)
+                    let tokenSymbol = null;
+                    let isBaseHive = false;
+                    
+                    if (baseSymbol === 'SWAP.HIVE') {
+                        tokenSymbol = quoteSymbol;
+                        isBaseHive = true;
+                    } else if (quoteSymbol === 'SWAP.HIVE') {
+                        tokenSymbol = baseSymbol;
+                        isBaseHive = false;
+                    } else {
+                        // SWAP.HIVE:SWAP.HBD gibi referans pair'leri atla
+                        if (baseSymbol.startsWith('SWAP.') && quoteSymbol.startsWith('SWAP.')) {
+                            return;
+                        }
+                        // Diğer pair'ler (örn: SWAP.HBD:BEE)
+                        tokenSymbol = baseSymbol.startsWith('SWAP.') ? quoteSymbol : baseSymbol;
+                    }
+                    
+                    if (!tokenSymbol) return;
+                    
+                    // SWAP.HIVE cinsinden fiyat hesapla
+                    let priceInHive = null;
+                    
+                    if (baseSymbol === 'SWAP.HIVE') {
+                        // 1 TOKEN = (SWAP.HIVE / TOKEN) SWAP.HIVE
+                        priceInHive = baseQty / quoteQty;
+                    } else if (quoteSymbol === 'SWAP.HIVE') {
+                        // 1 TOKEN = (TOKEN / SWAP.HIVE) SWAP.HIVE (ters)
+                        priceInHive = quoteQty / baseQty;
+                    } else {
+                        // Çapraz kur: SWAP.HBD:BEE gibi
+                        // Önce 1 BEE = X HBD, sonra 1 HBD = Y HIVE
+                        const otherToken = baseSymbol.startsWith('SWAP.') ? baseSymbol : quoteSymbol;
+                        const refPrice = referencePrices[otherToken];
+                        
+                        if (refPrice) {
+                            let priceInOther = null;
+                            if (baseSymbol === otherToken) {
+                                priceInOther = baseQty / quoteQty;
+                            } else {
+                                priceInOther = quoteQty / baseQty;
+                            }
+                            priceInHive = priceInOther * refPrice;
+                        }
+                    }
+                    
+                    if (priceInHive && priceInHive > 0) {
+                        if (!tokenPools[tokenSymbol]) {
+                            tokenPools[tokenSymbol] = [];
+                        }
+                        tokenPools[tokenSymbol].push({
+                            pair: tokenPair,
+                            priceInHive: priceInHive,
+                            baseQty: baseQty,
+                            quoteQty: quoteQty
+                        });
+                    }
+                });
+
+                logDebug(`${Object.keys(tokenPools).length} benzersiz token bulundu`, 'success');
+
+                // İstatistikler
+                const multiPoolTokens = Object.keys(tokenPools).filter(t => tokenPools[t].length > 1);
+                logDebug(`${multiPoolTokens.length} token birden fazla havuza sahip`, 'success');
+
+                // Özet göster
+                document.getElementById('summary').style.display = 'grid';
+                document.getElementById('totalPools').textContent = pools.length;
+                document.getElementById('uniqueTokens').textContent = Object.keys(tokenPools).length;
+                document.getElementById('multiPoolTokens').textContent = multiPoolTokens.length;
+
+                // Token tablosunu doldur
+                const tokenRows = [];
+                const arbRows = [];
+
+                Object.keys(tokenPools).forEach(token => {
+                    const pools = tokenPools[token];
+                    const prices = pools.map(p => p.priceInHive);
+                    const minPrice = Math.min(...prices);
+                    const maxPrice = Math.max(...prices);
+                    const diff = ((maxPrice - minPrice) / minPrice) * 100;
+                    const netProfit = diff - swapFee * 2; // Alış + satış ücreti
+
+                    const pairs = pools.map(p => p.pair).join(', ');
+                    
+                    // Filtrele
+                    if (filter === 'multi' && pools.length < 2) return;
+                    if (filter === 'profit' && netProfit < minDiff) return;
+                    if (diff < minDiff && filter === 'all') return;
+
+                    tokenRows.push({
+                        token,
+                        poolCount: pools.length,
+                        pairs,
+                        minPrice,
+                        maxPrice,
+                        diff,
+                        netProfit
+                    });
+
+                    // Arbitraj fırsatları (sadece çoklu havuz)
+                    if (pools.length >= 2 && netProfit > 0) {
+                        const cheap = pools.find(p => p.priceInHive === minPrice);
+                        const expensive = pools.find(p => p.priceInHive === maxPrice);
+                        
+                        arbRows.push({
+                            token,
+                            cheapPair: cheap.pair,
+                            expensivePair: expensive.pair,
+                            buyPrice: minPrice,
+                            sellPrice: maxPrice,
+                            grossDiff: diff,
+                            netProfit
+                        });
+                    }
+                });
+
+                // Sırala (fark oranına göre)
+                tokenRows.sort((a, b) => b.diff - a.diff);
+                arbRows.sort((a, b) => b.netProfit - a.netProfit);
+
+                document.getElementById('opportunities').textContent = arbRows.length;
+
+                // Token tablosunu render et
+                const tokenTableBody = document.getElementById('tokenTableBody');
+                if (tokenRows.length === 0) {
+                    tokenTableBody.innerHTML = '<tr><td colspan="7" class="no-data">Kriterlere uygun token bulunamadı</td></tr>';
+                } else {
+                    tokenTableBody.innerHTML = tokenRows.map(row => {
+                        const diffClass = row.diff > 0 ? 'profit' : 'neutral';
+                        const profitClass = row.netProfit > 0 ? 'profit' : 'loss';
+                        return `
+                            <tr>
+                                <td class="token-name">${row.token}</td>
+                                <td>${row.poolCount}</td>
+                                <td style="font-size: 11px;">${row.pairs}</td>
+                                <td class="price">${row.minPrice.toFixed(8)}</td>
+                                <td class="price">${row.maxPrice.toFixed(8)}</td>
+                                <td class="${diffClass}">${row.diff.toFixed(2)}%</td>
+                                <td class="${profitClass}">${row.netProfit.toFixed(2)}%</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+
+                // Arbitraj tablosunu render et
+                const arbTableBody = document.getElementById('arbTableBody');
+                if (arbRows.length === 0) {
+                    arbTableBody.innerHTML = '<tr><td colspan="7" class="no-data">Şu an arbitraj fırsatı yok</td></tr>';
+                } else {
+                    arbTableBody.innerHTML = arbRows.map(row => `
+                        <tr>
+                            <td class="token-name">${row.token}</td>
+                            <td>${row.cheapPair}</td>
+                            <td>${row.expensivePair}</td>
+                            <td class="price">${row.buyPrice.toFixed(8)}</td>
+                            <td class="price">${row.sellPrice.toFixed(8)}</td>
+                            <td class="profit">${row.grossDiff.toFixed(2)}%</td>
+                            <td class="profit">${row.netProfit.toFixed(2)}%</td>
+                        </tr>
+                    `).join('');
+                }
+
+                document.getElementById('status').textContent = `Keşif tamamlandı | ${tokenRows.length} token listelendi, ${arbRows.length} arbitraj fırsatı`;
+                logDebug('Keşif tamamlandı!', 'success');
+
+            } catch (error) {
+                console.error('Hata:', error);
+                logDebug(`HATA: ${error.message}`, 'error');
+                document.getElementById('status').textContent = 'Hata oluştu';
+            }
+        }
+
+        document.getElementById('minDiff').addEventListener('change', discover);
+        document.getElementById('swapFee').addEventListener('change', discover);
+        document.getElementById('filter').addEventListener('change', discover);
+    </script>
+</body>
+</html>
