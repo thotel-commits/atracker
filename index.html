@@ -33,16 +33,15 @@
         .controls button:hover { background: #2ea043; }
         .status { color: #8b949e; font-size: 12px; margin-bottom: 20px; }
         
-        /* Debug Panel */
         .debug-panel {
             background: #161b22;
             border: 1px solid #30363d;
             border-radius: 8px;
             padding: 15px;
             margin-bottom: 20px;
-            font-size: 12px;
+            font-size: 11px;
             font-family: 'Courier New', monospace;
-            max-height: 200px;
+            max-height: 300px;
             overflow-y: auto;
         }
         .debug-panel h3 {
@@ -58,6 +57,7 @@
         .debug-line.error { color: #f85149; }
         .debug-line.success { color: #3fb950; }
         .debug-line.info { color: #58a6ff; }
+        .debug-line.raw { color: #d2a8ff; font-size: 10px; }
         
         table {
             width: 100%; border-collapse: collapse;
@@ -106,9 +106,8 @@
         
         <div class="status" id="status">Yükleniyor...</div>
         
-        <!-- Debug Paneli -->
         <div class="debug-panel" id="debugPanel">
-            <h3>🔍 Debug Bilgisi</h3>
+            <h3> Debug Bilgisi</h3>
             <div id="debugContent">Başlatılıyor...</div>
         </div>
         
@@ -141,8 +140,7 @@
             line.className = `debug-line ${type}`;
             line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             content.appendChild(line);
-            // Son 20 satırı tut
-            while (content.children.length > 20) {
+            while (content.children.length > 30) {
                 content.removeChild(content.firstChild);
             }
         }
@@ -171,7 +169,8 @@
         }
 
         async function fetchTDPools() {
-            const payload = {
+            // Önce 'pools' tablosunu dene
+            const payload1 = {
                 jsonrpc: '2.0',
                 id: Math.random(),
                 method: 'find',
@@ -179,18 +178,50 @@
                     contract: 'swap',
                     table: 'pools',
                     query: {},
-                    limit: 1000
+                    limit: 100
                 }
             };
 
-            const response = await fetch(HIVE_ENGINE_API, {
+            const response1 = await fetch(HIVE_ENGINE_API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload1)
             });
 
-            const data = await response.json();
-            return data.result || [];
+            const data1 = await response1.json();
+            
+            // Ham yanıtı debug paneline yaz
+            logDebug(`swap.pools ham yanıt: ${JSON.stringify(data1).substring(0, 300)}`, 'raw');
+            
+            // Eğer pools boşsa, 'marketPools' tablosunu dene
+            if (!data1.result || data1.result.length === 0) {
+                logDebug('pools boş, marketPools deneniyor...', 'info');
+                
+                const payload2 = {
+                    jsonrpc: '2.0',
+                    id: Math.random(),
+                    method: 'find',
+                    params: {
+                        contract: 'swap',
+                        table: 'marketPools',
+                        query: {},
+                        limit: 100
+                    }
+                };
+
+                const response2 = await fetch(HIVE_ENGINE_API, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload2)
+                });
+
+                const data2 = await response2.json();
+                logDebug(`swap.marketPools ham yanıt: ${JSON.stringify(data2).substring(0, 300)}`, 'raw');
+                
+                return data2.result || [];
+            }
+
+            return data1.result || [];
         }
 
         function calculateArbitrage() {
@@ -213,14 +244,12 @@
                     
                     logDebug('TD havuzları çekiliyor...', 'info');
                     const pools = await fetchTDPools();
-                    logDebug(`TD havuzları: ${pools.length} kayıt`, 'success');
+                    logDebug(`TD havuzları: ${pools.length} kayıt`, pools.length > 0 ? 'success' : 'error');
                     
-                    // İlk 3 havuzu debug için göster
                     if (pools.length > 0) {
-                        logDebug(`Örnek havuz: ${JSON.stringify(pools[0]).substring(0, 150)}...`, 'info');
+                        logDebug(`Örnek havuz yapısı: ${JSON.stringify(pools[0]).substring(0, 200)}`, 'info');
                     }
 
-                    // HE Market: En iyi satış fiyatı (en düşük ask)
                     const hePrices = {};
                     sellBook.forEach(order => {
                         const symbol = order.symbol;
@@ -230,7 +259,6 @@
                         }
                     });
 
-                    // HE Market: En iyi alış fiyatı (en yüksek bid)
                     buyBook.forEach(order => {
                         const symbol = order.symbol;
                         const price = parseFloat(order.price);
@@ -242,16 +270,11 @@
 
                     logDebug(`HE'de ${Object.keys(hePrices).length} token bulundu`, 'success');
 
-                    // TD Pools: Havuz fiyatları
                     const tdPrices = {};
                     pools.forEach(pool => {
-                        // Havuz yapısı: baseSymbol/quoteSymbol
-                        // Genellikle SWAP.HIVE baz, token quote olur
                         const baseSymbol = pool.baseSymbol;
                         const quoteSymbol = pool.quoteSymbol;
                         
-                        // Fiyat = quoteQuantity / baseQuantity (base başına quote)
-                        // Veya pool.price alanı varsa onu kullan
                         let price = null;
                         
                         if (pool.price) {
@@ -265,11 +288,9 @@
                         }
                         
                         if (price && price > 0) {
-                            // SWAP.HIVE baz ise, quote tokenin fiyatı
                             if (baseSymbol === 'SWAP.HIVE' && quoteSymbol) {
                                 tdPrices[quoteSymbol] = price;
                             }
-                            // Quote SWAP.HIVE ise, base tokenin fiyatı (ters)
                             else if (quoteSymbol === 'SWAP.HIVE' && baseSymbol) {
                                 tdPrices[baseSymbol] = 1 / price;
                             }
@@ -277,14 +298,7 @@
                     });
 
                     logDebug(`TD'de ${Object.keys(tdPrices).length} token fiyatı bulundu`, 'success');
-                    
-                    // İlk 5 TD fiyatını göster
-                    const tdKeys = Object.keys(tdPrices).slice(0, 5);
-                    tdKeys.forEach(key => {
-                        logDebug(`TD ${key}: ${tdPrices[key].toFixed(6)}`, 'info');
-                    });
 
-                    // Arbitraj hesapla
                     const opportunities = [];
                     let matchedCount = 0;
                     
@@ -292,18 +306,11 @@
                         const he = hePrices[symbol];
                         const td = tdPrices[symbol];
 
-                        if (!he.ask || !he.bid) return;
-                        
-                        if (!td) return; // TD'de fiyat yoksa atla
+                        if (!he.ask || !he.bid || !td) return;
                         
                         matchedCount++;
 
-                        // HE'den al, TD'de sat
-                        // HE'de ask fiyatından alırsın, TD'de havuz fiyatından satarsın
                         const profitHEtoTD = ((td - he.ask) / he.ask) * 100 - swapFee;
-                        
-                        // TD'den al, HE'de sat
-                        // TD'de havuz fiyatından alırsın, HE'de bid fiyatından satarsın
                         const profitTDtoHE = ((he.bid - td) / td) * 100 - swapFee;
 
                         if (filter === 'profit' && profitHEtoTD < minProfit && profitTDtoHE < minProfit) {
@@ -325,7 +332,6 @@
                     logDebug(`Eşleşen token: ${matchedCount}`, 'info');
                     logDebug(`Fırsat bulundu: ${opportunities.length}`, opportunities.length > 0 ? 'success' : 'error');
 
-                    // Kâr oranına göre sırala
                     opportunities.sort((a, b) => Math.max(b.profitHEtoTD, b.profitTDtoHE) - Math.max(a.profitHEtoTD, a.profitTDtoHE));
 
                     renderTable(opportunities);
@@ -368,13 +374,11 @@
             fetchAndRender();
         }
 
-        // Sayfa yüklendiğinde ve her 30 saniyede bir güncelle
         window.addEventListener('load', () => {
             fetchData();
             updateInterval = setInterval(fetchData, 30000);
         });
 
-        // Filtre değiştiğinde güncelle
         document.getElementById('minProfit').addEventListener('change', fetchData);
         document.getElementById('swapFee').addEventListener('change', fetchData);
         document.getElementById('filter').addEventListener('change', fetchData);
