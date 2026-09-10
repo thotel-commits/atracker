@@ -41,7 +41,7 @@
             margin-bottom: 20px;
             font-size: 11px;
             font-family: 'Courier New', monospace;
-            max-height: 300px;
+            max-height: 400px;
             overflow-y: auto;
         }
         .debug-panel h3 {
@@ -107,7 +107,7 @@
         <div class="status" id="status">Yükleniyor...</div>
         
         <div class="debug-panel" id="debugPanel">
-            <h3> Debug Bilgisi</h3>
+            <h3>🔍 Debug Bilgisi</h3>
             <div id="debugContent">Başlatılıyor...</div>
         </div>
         
@@ -140,9 +140,27 @@
             line.className = `debug-line ${type}`;
             line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             content.appendChild(line);
-            while (content.children.length > 30) {
+            while (content.children.length > 50) {
                 content.removeChild(content.firstChild);
             }
+        }
+
+        async function apiCall(method, params) {
+            const payload = {
+                jsonrpc: '2.0',
+                id: Math.random(),
+                method: method,
+                params: params
+            };
+
+            const response = await fetch(HIVE_ENGINE_API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+            return data;
         }
 
         async function fetchHEData(table, query = {}) {
@@ -168,60 +186,71 @@
             return data.result || [];
         }
 
-        async function fetchTDPools() {
-            // Önce 'pools' tablosunu dene
-            const payload1 = {
-                jsonrpc: '2.0',
-                id: Math.random(),
-                method: 'find',
-                params: {
-                    contract: 'swap',
-                    table: 'pools',
-                    query: {},
-                    limit: 100
+        async function exploreSwapContract() {
+            logDebug(' swap kontratı araştırılıyor...', 'info');
+            
+            // 1. getContractInfo ile swap kontratını sorgula
+            const contractInfo = await apiCall('getContractInfo', { name: 'swap' });
+            logDebug(`getContractInfo('swap'): ${JSON.stringify(contractInfo).substring(0, 200)}`, 'raw');
+            
+            if (contractInfo.result) {
+                logDebug(`✅ swap kontratı bulundu! Tablolar: ${JSON.stringify(contractInfo.result.tables)}`, 'success');
+                return contractInfo.result.tables;
+            } else {
+                logDebug('❌ swap kontratı bulunamadı', 'error');
+                
+                // 2. Alternatif: market kontratının tablolarını kontrol et
+                logDebug('🔎 market kontratı araştırılıyor...', 'info');
+                const marketInfo = await apiCall('getContractInfo', { name: 'market' });
+                logDebug(`getContractInfo('market'): ${JSON.stringify(marketInfo).substring(0, 200)}`, 'raw');
+                
+                if (marketInfo.result) {
+                    logDebug(`✅ market kontratı tabloları: ${JSON.stringify(marketInfo.result.tables)}`, 'success');
                 }
-            };
-
-            const response1 = await fetch(HIVE_ENGINE_API, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload1)
-            });
-
-            const data1 = await response1.json();
-            
-            // Ham yanıtı debug paneline yaz
-            logDebug(`swap.pools ham yanıt: ${JSON.stringify(data1).substring(0, 300)}`, 'raw');
-            
-            // Eğer pools boşsa, 'marketPools' tablosunu dene
-            if (!data1.result || data1.result.length === 0) {
-                logDebug('pools boş, marketPools deneniyor...', 'info');
                 
-                const payload2 = {
-                    jsonrpc: '2.0',
-                    id: Math.random(),
-                    method: 'find',
-                    params: {
-                        contract: 'swap',
-                        table: 'marketPools',
-                        query: {},
-                        limit: 100
-                    }
-                };
-
-                const response2 = await fetch(HIVE_ENGINE_API, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload2)
-                });
-
-                const data2 = await response2.json();
-                logDebug(`swap.marketPools ham yanıt: ${JSON.stringify(data2).substring(0, 300)}`, 'raw');
-                
-                return data2.result || [];
+                return null;
             }
+        }
 
-            return data1.result || [];
+        async function fetchTDPools() {
+            // Önce kontrat yapısını keşfet
+            const tables = await exploreSwapContract();
+            
+            if (!tables) {
+                logDebug('⚠️ TribalDex havuzları için uygun kontrat bulunamadı', 'error');
+                return [];
+            }
+            
+            // Her tabloyu dene
+            for (const table of tables) {
+                logDebug(`🔎 swap.${table} tablosu deneniyor...`, 'info');
+                const result = await apiCall('find', {
+                    contract: 'swap',
+                    table: table,
+                    query: {},
+                    limit: 10
+                });
+                
+                logDebug(`swap.${table} yanıt: ${JSON.stringify(result).substring(0, 200)}`, 'raw');
+                
+                if (result.result && result.result.length > 0) {
+                    logDebug(`✅ ${table} tablosu çalışıyor! ${result.result.length} kayıt`, 'success');
+                    logDebug(`Örnek kayıt: ${JSON.stringify(result.result[0]).substring(0, 300)}`, 'info');
+                    
+                    // Tüm veriyi çek
+                    const fullResult = await apiCall('find', {
+                        contract: 'swap',
+                        table: table,
+                        query: {},
+                        limit: 1000
+                    });
+                    
+                    return fullResult.result || [];
+                }
+            }
+            
+            logDebug('❌ Hiçbir tablo veri döndürmedi', 'error');
+            return [];
         }
 
         function calculateArbitrage() {
@@ -245,10 +274,6 @@
                     logDebug('TD havuzları çekiliyor...', 'info');
                     const pools = await fetchTDPools();
                     logDebug(`TD havuzları: ${pools.length} kayıt`, pools.length > 0 ? 'success' : 'error');
-                    
-                    if (pools.length > 0) {
-                        logDebug(`Örnek havuz yapısı: ${JSON.stringify(pools[0]).substring(0, 200)}`, 'info');
-                    }
 
                     const hePrices = {};
                     sellBook.forEach(order => {
