@@ -41,7 +41,7 @@
             margin-bottom: 20px;
             font-size: 11px;
             font-family: 'Courier New', monospace;
-            max-height: 400px;
+            max-height: 500px;
             overflow-y: auto;
         }
         .debug-panel h3 { color: #58a6ff; margin-bottom: 10px; font-size: 13px; }
@@ -130,17 +130,16 @@
             line.className = `debug-line ${type}`;
             line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             content.appendChild(line);
-            while (content.children.length > 50) {
+            while (content.children.length > 60) {
                 content.removeChild(content.firstChild);
             }
         }
 
-        // DOĞRU YÖNTEM: Hive Engine'de metod ismi prefix'siz kullanılır
         async function apiCall(method, params) {
             const payload = {
                 jsonrpc: '2.0',
                 id: Math.random(),
-                method: method,  // "find", "findOne" gibi (prefix YOK)
+                method: method,
                 params: params
             };
 
@@ -154,7 +153,6 @@
             return data;
         }
 
-        // HE Market verisi çek (prefix'siz find)
         async function fetchHEData(table, query = {}) {
             const result = await apiCall('find', {
                 contract: 'market',
@@ -165,66 +163,76 @@
             return result.result || [];
         }
 
-        // TribalDex havuzlarını çek - birden fazla tablo dene
-        async function fetchTDPools() {
-            logDebug('🔎 TD havuzları araştırılıyor...', 'info');
+        // TribalDex için farklı kontrat isimlerini dene
+        async function findTribalDexContract() {
+            logDebug('🔎 TribalDex kontratı aranıyor...', 'info');
             
-            // Bilinen tablo isimlerini sırayla dene
-            const tablesToTry = ['pools', 'marketPools', 'liquidityPools', 'swapPools'];
+            // Olası kontrat isimleri
+            const contractNames = [
+                'tribaldex', 'dex', 'amm', 'swap', 'liquidity',
+                'pool', 'pools', 'exchange', 'trade'
+            ];
             
-            for (const table of tablesToTry) {
-                logDebug(`🔎 swap.${table} tablosu deneniyor...`, 'info');
+            for (const contractName of contractNames) {
+                logDebug(`🔎 ${contractName} kontratı deneniyor...`, 'info');
                 
-                const result = await apiCall('find', {
-                    contract: 'swap',
-                    table: table,
+                // Bu kontratta herhangi bir tablo var mı kontrol et
+                const testResult = await apiCall('find', {
+                    contract: contractName,
+                    table: 'params',
                     query: {},
-                    limit: 5
+                    limit: 1
                 });
                 
-                // Ham yanıtı göster
-                logDebug(`swap.${table} yanıt: ${JSON.stringify(result).substring(0, 200)}`, 'raw');
-                
-                if (result.result && result.result.length > 0) {
-                    logDebug(`✅ ${table} tablosu ${result.result.length} kayıt döndürdü!`, 'success');
-                    logDebug(`Örnek: ${JSON.stringify(result.result[0]).substring(0, 300)}`, 'raw');
+                // Eğer hata yoksa (result null değilse), kontrat var demektir
+                if (testResult.result !== null) {
+                    logDebug(`✅ ${contractName} kontratı bulundu!`, 'success');
                     
-                    // Tüm veriyi çek
-                    const fullResult = await apiCall('find', {
-                        contract: 'swap',
-                        table: table,
-                        query: {},
-                        limit: 1000
-                    });
+                    // Şimdi bu kontrattaki olası tablo isimlerini dene
+                    const tableNames = ['pools', 'markets', 'pairs', 'liquidity', 'tokens'];
                     
-                    return fullResult.result || [];
+                    for (const tableName of tableNames) {
+                        const tableResult = await apiCall('find', {
+                            contract: contractName,
+                            table: tableName,
+                            query: {},
+                            limit: 3
+                        });
+                        
+                        if (tableResult.result && tableResult.result.length > 0) {
+                            logDebug(`✅ ${contractName}.${tableName} tablosu ${tableResult.result.length} kayıt döndürdü!`, 'success');
+                            logDebug(`Örnek: ${JSON.stringify(tableResult.result[0]).substring(0, 300)}`, 'raw');
+                            
+                            // Tüm veriyi çek
+                            const fullResult = await apiCall('find', {
+                                contract: contractName,
+                                table: tableName,
+                                query: {},
+                                limit: 1000
+                            });
+                            
+                            return {
+                                contract: contractName,
+                                table: tableName,
+                                data: fullResult.result || []
+                            };
+                        }
+                    }
                 }
             }
             
-            // Eğer swap kontratında hiçbir tablo çalışmazsa, market kontratını dene
-            logDebug('️ swap kontratında veri bulunamadı, market.metrics deneniyor...', 'info');
-            const metricsResult = await apiCall('find', {
-                contract: 'market',
-                table: 'metrics',
-                query: {},
-                limit: 5
-            });
+            logDebug('❌ TribalDex kontratı bulunamadı', 'error');
+            return null;
+        }
+
+        async function fetchTDPools() {
+            const tdData = await findTribalDexContract();
             
-            if (metricsResult.result && metricsResult.result.length > 0) {
-                logDebug(`✅ market.metrics ${metricsResult.result.length} kayıt döndürdü`, 'success');
-                logDebug(`Örnek: ${JSON.stringify(metricsResult.result[0]).substring(0, 300)}`, 'raw');
-                
-                const fullResult = await apiCall('find', {
-                    contract: 'market',
-                    table: 'metrics',
-                    query: {},
-                    limit: 1000
-                });
-                
-                return fullResult.result || [];
+            if (tdData) {
+                logDebug(`✅ TD verisi bulundu: ${tdData.contract}.${tdData.table} (${tdData.data.length} kayıt)`, 'success');
+                return tdData.data;
             }
             
-            logDebug('❌ Hiçbir tablo veri döndürmedi', 'error');
             return [];
         }
 
@@ -274,9 +282,8 @@
                     // TD Havuz fiyatlarını hesapla
                     const tdPrices = {};
                     pools.forEach(pool => {
-                        // Havuz yapısına göre fiyat hesapla
-                        const baseSymbol = pool.baseSymbol;
-                        const quoteSymbol = pool.quoteSymbol;
+                        const baseSymbol = pool.baseSymbol || pool.tokenSymbol || pool.symbol;
+                        const quoteSymbol = pool.quoteSymbol || 'SWAP.HIVE';
                         
                         let price = null;
                         
@@ -284,7 +291,7 @@
                         if (pool.price) {
                             price = parseFloat(pool.price);
                         } 
-                        // baseQuote/quoteQuantity oranından hesapla
+                        // baseQuantity/quoteQuantity oranından hesapla
                         else if (pool.baseQuantity && pool.quoteQuantity) {
                             const baseQty = parseFloat(pool.baseQuantity);
                             const quoteQty = parseFloat(pool.quoteQuantity);
@@ -292,26 +299,23 @@
                                 price = quoteQty / baseQty;
                             }
                         }
-                        // metrics tablosundan geliyorsa (lastPrice, price)
+                        // lastPrice alanı varsa
                         else if (pool.lastPrice) {
                             price = parseFloat(pool.lastPrice);
                         }
-                        else if (pool.price && pool.symbol) {
-                            price = parseFloat(pool.price);
-                        }
                         
-                        if (price && price > 0) {
+                        if (price && price > 0 && baseSymbol) {
                             // SWAP.HIVE baz ise, quote tokenin fiyatı
-                            if (baseSymbol === 'SWAP.HIVE' && quoteSymbol) {
+                            if (baseSymbol === 'SWAP.HIVE' && quoteSymbol && quoteSymbol !== 'SWAP.HIVE') {
                                 tdPrices[quoteSymbol] = price;
                             }
                             // SWAP.HIVE quote ise, base tokenin fiyatı (ters)
-                            else if (quoteSymbol === 'SWAP.HIVE' && baseSymbol) {
+                            else if (quoteSymbol === 'SWAP.HIVE' && baseSymbol !== 'SWAP.HIVE') {
                                 tdPrices[baseSymbol] = 1 / price;
                             }
-                            // metrics tablosundan geliyorsa (symbol + lastPrice)
-                            else if (pool.symbol && price) {
-                                tdPrices[pool.symbol] = price;
+                            // Direkt token fiyatı
+                            else if (baseSymbol !== 'SWAP.HIVE') {
+                                tdPrices[baseSymbol] = price;
                             }
                         }
                     });
