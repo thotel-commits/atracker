@@ -163,7 +163,6 @@
             return result.result || [];
         }
 
-        // DOĞRU YÖNTEM: TribalDex = marketpools kontratı
         async function fetchTDPools() {
             logDebug('🔎 TribalDex (marketpools) verileri çekiliyor...', 'info');
             
@@ -177,10 +176,9 @@
 
                 if (result.result && result.result.length > 0) {
                     logDebug(`✅ marketpools.pools tablosu ${result.result.length} kayıt döndürdü!`, 'success');
-                    logDebug(`Örnek: ${JSON.stringify(result.result[0]).substring(0, 300)}`, 'raw');
                     return result.result;
                 } else {
-                    logDebug('❌ marketpools.pools tablosu boş veya veri dönmedi', 'error');
+                    logDebug('❌ marketpools.pools tablosu boş', 'error');
                     return [];
                 }
             } catch (error) {
@@ -232,39 +230,30 @@
 
                     logDebug(`HE'de ${Object.keys(hePrices).length} token bulundu`, 'success');
 
-                    // TD Havuz fiyatlarını hesapla
+                    // TD Havuz fiyatlarını hesapla - DOĞRU YÖNTEM
                     const tdPrices = {};
                     pools.forEach(pool => {
-                        // marketpools havuz yapısı: tokenSymbol, baseQuantity, quoteQuantity
-                        // Genellikle SWAP.HIVE baz, token quote olur
-                        const tokenSymbol = pool.tokenSymbol || pool.symbol;
-                        const baseSymbol = pool.baseSymbol || 'SWAP.HIVE';
-                        const quoteSymbol = pool.quoteSymbol || tokenSymbol;
+                        // tokenPair formatı: "BASE:QUOTE" (örn: "SWAP.HIVE:BEE")
+                        const tokenPair = pool.tokenPair;
+                        if (!tokenPair) return;
                         
-                        let price = null;
+                        const parts = tokenPair.split(':');
+                        if (parts.length !== 2) return;
                         
-                        // Fiyat alanı varsa direkt kullan
-                        if (pool.price) {
-                            price = parseFloat(pool.price);
-                        } 
-                        // baseQuantity/quoteQuantity oranından hesapla
-                        else if (pool.baseQuantity && pool.quoteQuantity) {
-                            const baseQty = parseFloat(pool.baseQuantity);
-                            const quoteQty = parseFloat(pool.quoteQuantity);
-                            if (baseQty > 0) {
-                                price = quoteQty / baseQty;
-                            }
+                        const baseSymbol = parts[0];
+                        const quoteSymbol = parts[1];
+                        
+                        // Fiyatları al
+                        const basePrice = parseFloat(pool.basePrice);
+                        const quotePrice = parseFloat(pool.quotePrice);
+                        
+                        // SWAP.HIVE baz ise, quote tokenin SWAP.HIVE cinsinden fiyatı = quotePrice
+                        if (baseSymbol === 'SWAP.HIVE' && quotePrice > 0) {
+                            tdPrices[quoteSymbol] = quotePrice;
                         }
-                        
-                        if (price && price > 0 && tokenSymbol) {
-                            // SWAP.HIVE baz ise, token fiyatı
-                            if (baseSymbol === 'SWAP.HIVE') {
-                                tdPrices[tokenSymbol] = price;
-                            }
-                            // SWAP.HIVE quote ise, token fiyatı (ters)
-                            else if (quoteSymbol === 'SWAP.HIVE') {
-                                tdPrices[tokenSymbol] = 1 / price;
-                            }
+                        // SWAP.HIVE quote ise, base tokenin SWAP.HIVE cinsinden fiyatı = basePrice
+                        else if (quoteSymbol === 'SWAP.HIVE' && basePrice > 0) {
+                            tdPrices[baseSymbol] = basePrice;
                         }
                     });
 
