@@ -135,12 +135,12 @@
             }
         }
 
-        // DOĞRU YÖNTEM: Hive Engine metodları "contracts/" prefix'i ile çağrılır
+        // DOĞRU YÖNTEM: Hive Engine'de metod ismi prefix'siz kullanılır
         async function apiCall(method, params) {
             const payload = {
                 jsonrpc: '2.0',
                 id: Math.random(),
-                method: method,  // Örn: "contracts/find", "contracts/getContractInfo"
+                method: method,  // "find", "findOne" gibi (prefix YOK)
                 params: params
             };
 
@@ -154,9 +154,9 @@
             return data;
         }
 
+        // HE Market verisi çek (prefix'siz find)
         async function fetchHEData(table, query = {}) {
-            // "contracts/find" ile çağırıyoruz
-            const result = await apiCall('contracts/find', {
+            const result = await apiCall('find', {
                 contract: 'market',
                 table: table,
                 query: query,
@@ -165,52 +165,66 @@
             return result.result || [];
         }
 
+        // TribalDex havuzlarını çek - birden fazla tablo dene
         async function fetchTDPools() {
-            logDebug('🔎 swap kontratı bilgileri alınıyor...', 'info');
+            logDebug('🔎 TD havuzları araştırılıyor...', 'info');
             
-            // 1. Swap kontratının tablolarını öğren
-            const contractInfo = await apiCall('contracts/getContractInfo', { name: 'swap' });
+            // Bilinen tablo isimlerini sırayla dene
+            const tablesToTry = ['pools', 'marketPools', 'liquidityPools', 'swapPools'];
             
-            if (contractInfo.error) {
-                logDebug(`❌ getContractInfo hatası: ${contractInfo.error.message}`, 'error');
-                return [];
-            }
-            
-            if (contractInfo.result) {
-                const tables = contractInfo.result.tables || [];
-                logDebug(`✅ swap kontratı tabloları: ${tables.join(', ')}`, 'success');
+            for (const table of tablesToTry) {
+                logDebug(`🔎 swap.${table} tablosu deneniyor...`, 'info');
                 
-                // 2. Her tabloyu dene, hangisi havuz verisi veriyor?
-                for (const table of tables) {
-                    logDebug(`🔎 swap.${table} deneniyor...`, 'info');
-                    const result = await apiCall('contracts/find', {
+                const result = await apiCall('find', {
+                    contract: 'swap',
+                    table: table,
+                    query: {},
+                    limit: 5
+                });
+                
+                // Ham yanıtı göster
+                logDebug(`swap.${table} yanıt: ${JSON.stringify(result).substring(0, 200)}`, 'raw');
+                
+                if (result.result && result.result.length > 0) {
+                    logDebug(`✅ ${table} tablosu ${result.result.length} kayıt döndürdü!`, 'success');
+                    logDebug(`Örnek: ${JSON.stringify(result.result[0]).substring(0, 300)}`, 'raw');
+                    
+                    // Tüm veriyi çek
+                    const fullResult = await apiCall('find', {
                         contract: 'swap',
                         table: table,
                         query: {},
-                        limit: 3
+                        limit: 1000
                     });
                     
-                    if (result.result && result.result.length > 0) {
-                        logDebug(`✅ ${table} tablosu ${result.result.length} kayıt döndürdü!`, 'success');
-                        logDebug(`Örnek: ${JSON.stringify(result.result[0]).substring(0, 250)}`, 'raw');
-                        
-                        // Doğru tabloyu bulduk, tüm veriyi çek
-                        const fullResult = await apiCall('contracts/find', {
-                            contract: 'swap',
-                            table: table,
-                            query: {},
-                            limit: 1000
-                        });
-                        
-                        return fullResult.result || [];
-                    }
+                    return fullResult.result || [];
                 }
-                
-                logDebug('❌ Hiçbir tablo veri döndürmedi', 'error');
-            } else {
-                logDebug('❌ swap kontratı bulunamadı', 'error');
             }
             
+            // Eğer swap kontratında hiçbir tablo çalışmazsa, market kontratını dene
+            logDebug('️ swap kontratında veri bulunamadı, market.metrics deneniyor...', 'info');
+            const metricsResult = await apiCall('find', {
+                contract: 'market',
+                table: 'metrics',
+                query: {},
+                limit: 5
+            });
+            
+            if (metricsResult.result && metricsResult.result.length > 0) {
+                logDebug(`✅ market.metrics ${metricsResult.result.length} kayıt döndürdü`, 'success');
+                logDebug(`Örnek: ${JSON.stringify(metricsResult.result[0]).substring(0, 300)}`, 'raw');
+                
+                const fullResult = await apiCall('find', {
+                    contract: 'market',
+                    table: 'metrics',
+                    query: {},
+                    limit: 1000
+                });
+                
+                return fullResult.result || [];
+            }
+            
+            logDebug('❌ Hiçbir tablo veri döndürmedi', 'error');
             return [];
         }
 
@@ -226,11 +240,11 @@
                 try {
                     logDebug('HE sellBook çekiliyor...', 'info');
                     const sellBook = await fetchHEData('sellBook');
-                    logDebug(`HE sellBook: ${sellBook.length} kayıt`, 'success');
+                    logDebug(`HE sellBook: ${sellBook.length} kayıt`, sellBook.length > 0 ? 'success' : 'error');
                     
                     logDebug('HE buyBook çekiliyor...', 'info');
                     const buyBook = await fetchHEData('buyBook');
-                    logDebug(`HE buyBook: ${buyBook.length} kayıt`, 'success');
+                    logDebug(`HE buyBook: ${buyBook.length} kayıt`, buyBook.length > 0 ? 'success' : 'error');
                     
                     logDebug('TD havuzları çekiliyor...', 'info');
                     const pools = await fetchTDPools();
@@ -260,6 +274,7 @@
                     // TD Havuz fiyatlarını hesapla
                     const tdPrices = {};
                     pools.forEach(pool => {
+                        // Havuz yapısına göre fiyat hesapla
                         const baseSymbol = pool.baseSymbol;
                         const quoteSymbol = pool.quoteSymbol;
                         
@@ -269,7 +284,7 @@
                         if (pool.price) {
                             price = parseFloat(pool.price);
                         } 
-                        // Yoksa baseQuantity/quoteQuantity oranından hesapla
+                        // baseQuote/quoteQuantity oranından hesapla
                         else if (pool.baseQuantity && pool.quoteQuantity) {
                             const baseQty = parseFloat(pool.baseQuantity);
                             const quoteQty = parseFloat(pool.quoteQuantity);
@@ -277,15 +292,26 @@
                                 price = quoteQty / baseQty;
                             }
                         }
+                        // metrics tablosundan geliyorsa (lastPrice, price)
+                        else if (pool.lastPrice) {
+                            price = parseFloat(pool.lastPrice);
+                        }
+                        else if (pool.price && pool.symbol) {
+                            price = parseFloat(pool.price);
+                        }
                         
-                        if (price && price > 0 && baseSymbol && quoteSymbol) {
+                        if (price && price > 0) {
                             // SWAP.HIVE baz ise, quote tokenin fiyatı
-                            if (baseSymbol === 'SWAP.HIVE') {
+                            if (baseSymbol === 'SWAP.HIVE' && quoteSymbol) {
                                 tdPrices[quoteSymbol] = price;
                             }
                             // SWAP.HIVE quote ise, base tokenin fiyatı (ters)
-                            else if (quoteSymbol === 'SWAP.HIVE') {
+                            else if (quoteSymbol === 'SWAP.HIVE' && baseSymbol) {
                                 tdPrices[baseSymbol] = 1 / price;
+                            }
+                            // metrics tablosundan geliyorsa (symbol + lastPrice)
+                            else if (pool.symbol && price) {
+                                tdPrices[pool.symbol] = price;
                             }
                         }
                     });
