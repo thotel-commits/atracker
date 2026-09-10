@@ -72,17 +72,27 @@
 </head>
 <body>
     <div class="container">
-        <h1>Arbitrage Tracker</h1>
-        <p class="subtitle">HE ve TD arasındaki fiyat farklarını anlık olarak takip edin</p>
+        <h1>Arbitrage Tracker (HE vs TD)</h1>
+        <p class="subtitle">Hive Engine Market ve TribalDex Havuzları arası gerçek arbitraj fırsatları</p>
         
         <div class="controls">
+            <div>
+                <label>İşlem Boyutu (SWAP.HIVE):</label>
+                <select id="tradeSize">
+                    <option value="10">10 HIVE (Düşük slippage)</option>
+                    <option value="50">50 HIVE</option>
+                    <option value="100" selected>100 HIVE (Orta)</option>
+                    <option value="500">500 HIVE</option>
+                    <option value="1000">1000 HIVE (Yüksek slippage)</option>
+                </select>
+            </div>
             <div>
                 <label>Minimum Kâr (%):</label>
                 <input type="number" id="minProfit" value="0" min="0" step="0.1">
             </div>
             <div>
-                <label>Swap Ücreti (%):</label>
-                <input type="number" id="swapFee" value="0.3" min="0" step="0.1">
+                <label>Swap/Network Ücreti (%):</label>
+                <input type="number" id="swapFee" value="0.5" min="0" step="0.1">
             </div>
             <div>
                 <label>Filtre:</label>
@@ -105,11 +115,11 @@
             <thead>
                 <tr>
                     <th>Token</th>
-                    <th>HE Satış (Ask)</th>
-                    <th>HE Alış (Bid)</th>
-                    <th>TD Fiyat</th>
-                    <th>HE→TD Kâr</th>
-                    <th>TD→HE Kâr</th>
+                    <th>HE ASK (Satış)</th>
+                    <th>HE BID (Alış)</th>
+                    <th>TD BUY / SELL</th>
+                    <th>HE → TD Kâr</th>
+                    <th>TD → HE Kâr</th>
                 </tr>
             </thead>
             <tbody id="tableBody">
@@ -130,9 +140,17 @@
             line.className = `debug-line ${type}`;
             line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             content.appendChild(line);
-            while (content.children.length > 50) {
+            while (content.children.length > 60) {
                 content.removeChild(content.firstChild);
             }
+        }
+
+        // Virgül/Nokta farkına karşı güvenli parse
+        function safeParseFloat(value) {
+            if (value === null || value === undefined || value === '') return null;
+            const normalized = String(value).replace(/,/g, '.');
+            const parsed = parseFloat(normalized);
+            return isNaN(parsed) ? null : parsed;
         }
 
         async function apiCall(method, params) {
@@ -142,54 +160,39 @@
                 method: method,
                 params: params
             };
-
             const response = await fetch(HIVE_ENGINE_API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-
-            const data = await response.json();
-            return data;
+            return await response.json();
         }
 
-        async function fetchHEData(table, query = {}) {
+        async function fetchHEData(table) {
             const result = await apiCall('find', {
                 contract: 'market',
                 table: table,
-                query: query,
+                query: {},
                 limit: 1000
             });
             return result.result || [];
         }
 
         async function fetchTDPools() {
-            logDebug('🔎 TribalDex (marketpools) verileri çekiliyor...', 'info');
-            
-            try {
-                const result = await apiCall('find', {
-                    contract: 'marketpools',
-                    table: 'pools',
-                    query: {},
-                    limit: 1000
-                });
-
-                if (result.result && result.result.length > 0) {
-                    logDebug(`✅ marketpools.pools tablosu ${result.result.length} kayıt döndürdü!`, 'success');
-                    return result.result;
-                } else {
-                    logDebug('❌ marketpools.pools tablosu boş', 'error');
-                    return [];
-                }
-            } catch (error) {
-                logDebug(`HATA (marketpools): ${error.message}`, 'error');
-                return [];
-            }
+            const result = await apiCall('find', {
+                contract: 'marketpools',
+                table: 'pools',
+                query: {},
+                limit: 1000
+            });
+            return result.result || [];
         }
 
         function calculateArbitrage() {
+            // 🎯 İŞLEM BOYUTUNU KULLANICIDAN AL
+            const tradeSize = parseFloat(document.getElementById('tradeSize').value) || 100;
             const minProfit = parseFloat(document.getElementById('minProfit').value) || 0;
-            const swapFee = parseFloat(document.getElementById('swapFee').value) || 0.3;
+            const swapFee = parseFloat(document.getElementById('swapFee').value) || 0.5;
             const filter = document.getElementById('filter').value;
 
             return async () => {
@@ -197,90 +200,125 @@
                 document.getElementById('debugContent').innerHTML = '';
                 
                 try {
-                    logDebug('HE sellBook çekiliyor...', 'info');
+                    logDebug(`HE sellBook çekiliyor...`, 'info');
                     const sellBook = await fetchHEData('sellBook');
-                    logDebug(`HE sellBook: ${sellBook.length} kayıt`, sellBook.length > 0 ? 'success' : 'error');
+                    logDebug(`HE sellBook: ${sellBook.length} emir`, 'success');
                     
                     logDebug('HE buyBook çekiliyor...', 'info');
                     const buyBook = await fetchHEData('buyBook');
-                    logDebug(`HE buyBook: ${buyBook.length} kayıt`, buyBook.length > 0 ? 'success' : 'error');
+                    logDebug(`HE buyBook: ${buyBook.length} emir`, 'success');
                     
                     logDebug('TD havuzları çekiliyor...', 'info');
                     const pools = await fetchTDPools();
-                    logDebug(`TD havuzları: ${pools.length} kayıt`, pools.length > 0 ? 'success' : 'error');
+                    logDebug(`TD havuzları: ${pools.length} kayıt`, 'success');
 
-                    // HE Market: En iyi ask (satış) ve bid (alış) fiyatları
+                    // 1. HE Fiyatlarını Hesapla (En iyi ASK ve BID)
                     const hePrices = {};
                     sellBook.forEach(order => {
                         const symbol = order.symbol;
-                        const price = parseFloat(order.price);
+                        const price = safeParseFloat(order.price);
+                        if (!price || price <= 0) return;
                         if (!hePrices[symbol] || price < hePrices[symbol].ask) {
                             hePrices[symbol] = { ask: price };
                         }
                     });
-
                     buyBook.forEach(order => {
                         const symbol = order.symbol;
-                        const price = parseFloat(order.price);
+                        const price = safeParseFloat(order.price);
+                        if (!price || price <= 0) return;
                         if (!hePrices[symbol]) hePrices[symbol] = {};
                         if (!hePrices[symbol].bid || price > hePrices[symbol].bid) {
                             hePrices[symbol].bid = price;
                         }
                     });
-
                     logDebug(`HE'de ${Object.keys(hePrices).length} token bulundu`, 'success');
 
-                    // TD Havuz fiyatlarını hesapla - DOĞRU YÖNTEM
-                    const tdPrices = {};
+                    // 2. TD Fiyatlarını Hesapla (Seçilen işlem boyutuna göre AMM BUY/SELL)
+                    const tdBuyPrices = {};
+                    const tdSellPrices = {};
+                    
                     pools.forEach(pool => {
-                        // tokenPair formatı: "BASE:QUOTE" (örn: "SWAP.HIVE:BEE")
                         const tokenPair = pool.tokenPair;
                         if (!tokenPair) return;
-                        
                         const parts = tokenPair.split(':');
                         if (parts.length !== 2) return;
                         
                         const baseSymbol = parts[0];
                         const quoteSymbol = parts[1];
                         
-                        // Fiyatları al
-                        const basePrice = parseFloat(pool.basePrice);
-                        const quotePrice = parseFloat(pool.quotePrice);
+                        const baseQty = safeParseFloat(pool.baseQuantity);
+                        const quoteQty = safeParseFloat(pool.quoteQuantity);
                         
-                        // SWAP.HIVE baz ise, quote tokenin SWAP.HIVE cinsinden fiyatı = quotePrice
-                        if (baseSymbol === 'SWAP.HIVE' && quotePrice > 0) {
-                            tdPrices[quoteSymbol] = quotePrice;
+                        if (!baseQty || !quoteQty || baseQty <= 0 || quoteQty <= 0) return;
+                        
+                        let tokenSymbol = null;
+                        let isBaseHive = false;
+                        
+                        if (baseSymbol === 'SWAP.HIVE') {
+                            tokenSymbol = quoteSymbol;
+                            isBaseHive = true;
+                        } else if (quoteSymbol === 'SWAP.HIVE') {
+                            tokenSymbol = baseSymbol;
+                            isBaseHive = false;
+                        } else {
+                            return; // Sadece SWAP.HIVE pairlerini al
                         }
-                        // SWAP.HIVE quote ise, base tokenin SWAP.HIVE cinsinden fiyatı = basePrice
-                        else if (quoteSymbol === 'SWAP.HIVE' && basePrice > 0) {
-                            tdPrices[baseSymbol] = basePrice;
-                        }
-                    });
 
-                    logDebug(`TD'de ${Object.keys(tdPrices).length} token fiyatı bulundu`, 'success');
+                        // AMM Formülü (x * y = k) - SEÇİLEN İŞLEM BOYUTUNA GÖRE
+                        const k = baseQty * quoteQty;
+                        
+                        // TD BUY: SWAP.HIVE ver, Token al
+                        let tokensReceived = 0;
+                        if (isBaseHive) {
+                            const newBase = baseQty + tradeSize;
+                            const newQuote = k / newBase;
+                            tokensReceived = quoteQty - newQuote;
+                        } else {
+                            const newQuote = quoteQty + tradeSize;
+                            const newBase = k / newQuote;
+                            tokensReceived = baseQty - newBase;
+                        }
+                        
+                        if (tokensReceived <= 0) return;
+                        const tdBuyPrice = tradeSize / tokensReceived;
+                        
+                        // TD SELL: Aldığın Tokeni geri sat, SWAP.HIVE al
+                        let hiveReceived = 0;
+                        if (isBaseHive) {
+                            const newQuoteSell = quoteQty + tokensReceived;
+                            const newBaseSell = k / newQuoteSell;
+                            hiveReceived = baseQty - newBaseSell;
+                        } else {
+                            const newBaseSell = baseQty + tokensReceived;
+                            const newQuoteSell = k / newBaseSell;
+                            hiveReceived = quoteQty - newQuoteSell;
+                        }
+                        
+                        const tdSellPrice = hiveReceived / tokensReceived;
+                        
+                        tdBuyPrices[tokenSymbol] = tdBuyPrice;
+                        tdSellPrices[tokenSymbol] = tdSellPrice;
+                    });
                     
-                    const tdKeys = Object.keys(tdPrices).slice(0, 5);
-                    tdKeys.forEach(key => {
-                        logDebug(`TD ${key}: ${tdPrices[key].toFixed(6)}`, 'info');
-                    });
+                    logDebug(`TD'de ${Object.keys(tdBuyPrices).length} token fiyatı hesaplandı (İşlem boyutu: ${tradeSize} HIVE)`, 'success');
 
-                    // Arbitraj hesapla
+                    // 3. Arbitraj Hesapla
                     const opportunities = [];
                     let matchedCount = 0;
                     
                     Object.keys(hePrices).forEach(symbol => {
                         const he = hePrices[symbol];
-                        const td = tdPrices[symbol];
+                        const tdBuy = tdBuyPrices[symbol];
+                        const tdSell = tdSellPrices[symbol];
 
-                        if (!he.ask || !he.bid || !td) return;
-                        
+                        if (!he.ask || !he.bid || !tdBuy || !tdSell) return;
                         matchedCount++;
 
-                        // HE'den al, TD'de sat
-                        const profitHEtoTD = ((td - he.ask) / he.ask) * 100 - swapFee;
+                        // Senaryo 1: HE'den al (ASK), TD'de sat (SELL)
+                        const profitHEtoTD = ((tdSell - he.ask) / he.ask) * 100 - swapFee;
                         
-                        // TD'den al, HE'de sat
-                        const profitTDtoHE = ((he.bid - td) / td) * 100 - swapFee;
+                        // Senaryo 2: TD'den al (BUY), HE'de sat (BID)
+                        const profitTDtoHE = ((he.bid - tdBuy) / tdBuy) * 100 - swapFee;
 
                         if (filter === 'profit' && profitHEtoTD < minProfit && profitTDtoHE < minProfit) {
                             return;
@@ -291,7 +329,8 @@
                                 symbol,
                                 heAsk: he.ask,
                                 heBid: he.bid,
-                                tdPrice: td,
+                                tdBuy: tdBuy,
+                                tdSell: tdSell,
                                 profitHEtoTD,
                                 profitTDtoHE
                             });
@@ -301,10 +340,11 @@
                     logDebug(`Eşleşen token: ${matchedCount}`, 'info');
                     logDebug(`Fırsat bulundu: ${opportunities.length}`, opportunities.length > 0 ? 'success' : 'error');
 
+                    // Kâra göre sırala
                     opportunities.sort((a, b) => Math.max(b.profitHEtoTD, b.profitTDtoHE) - Math.max(a.profitHEtoTD, a.profitTDtoHE));
 
                     renderTable(opportunities);
-                    document.getElementById('status').textContent = `Son güncelleme: ${new Date().toLocaleTimeString('tr-TR')} | ${opportunities.length} fırsat bulundu`;
+                    document.getElementById('status').textContent = `Son güncelleme: ${new Date().toLocaleTimeString('tr-TR')} | ${opportunities.length} fırsat bulundu (İşlem boyutu: ${tradeSize} SWAP.HIVE)`;
                 } catch (error) {
                     console.error('Hata:', error);
                     logDebug(`HATA: ${error.message}`, 'error');
@@ -328,9 +368,9 @@
                 return `
                     <tr>
                         <td class="token-name">${opp.symbol}</td>
-                        <td class="price">${opp.heAsk.toFixed(6)}</td>
-                        <td class="price">${opp.heBid.toFixed(6)}</td>
-                        <td class="price">${opp.tdPrice.toFixed(6)}</td>
+                        <td class="price">${opp.heAsk.toFixed(8)}</td>
+                        <td class="price">${opp.heBid.toFixed(8)}</td>
+                        <td class="price">${opp.tdBuy.toFixed(8)} / ${opp.tdSell.toFixed(8)}</td>
                         <td class="${profitHEtoTDClass}">${opp.profitHEtoTD.toFixed(2)}%</td>
                         <td class="${profitTDtoHEClass}">${opp.profitTDtoHE.toFixed(2)}%</td>
                     </tr>
@@ -348,6 +388,8 @@
             updateInterval = setInterval(fetchData, 30000);
         });
 
+        // 🎯 İŞLEM BOYUTU DEĞİŞTİĞİNDE OTOMATİK YENİLE
+        document.getElementById('tradeSize').addEventListener('change', fetchData);
         document.getElementById('minProfit').addEventListener('change', fetchData);
         document.getElementById('swapFee').addEventListener('change', fetchData);
         document.getElementById('filter').addEventListener('change', fetchData);
